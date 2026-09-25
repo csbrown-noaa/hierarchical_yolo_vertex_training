@@ -94,7 +94,7 @@ gcloud ai custom-jobs create \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
   --display-name="${JOB_NAME}" \
-  --worker-pool-spec="machine-type=${MACHINE_TYPE},replica-count=1,accelerator-type=${ACCELERATOR_TYPE},accelerator-count=${ACCELERATOR_COUNT},container-image-uri=${IMAGE_URI},disk-type=pd-ssd,disk-size=${DISK_SIZE}" \
+  --worker-pool-spec="machine-type=${MACHINE_TYPE},replica-count=1,accelerator-type=${ACCELERATOR_TYPE},accelerator-count=${ACCELERATOR_COUNT},container-image-uri=${IMAGE_URI},boot-disk-type=pd-ssd,boot-disk-size=${DISK_SIZE}" \
   --args="--datasets=${DATASETS}" \
   --args="--project_name=${PROJECT_NAME}" \
   --args="--base_model=${MODEL_ARCH}" \
@@ -103,4 +103,3 @@ gcloud ai custom-jobs create \
 echo ""
 echo "Job submitted successfully! Monitor logs in the GCP Console under Vertex AI -> Training."
 echo ""
-
