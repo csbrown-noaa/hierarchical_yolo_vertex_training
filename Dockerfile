@@ -11,6 +11,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     libglib2.0-0 \
     wget \
     curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory within the container
