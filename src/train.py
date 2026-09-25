@@ -1,67 +1,60 @@
 import os
 import argparse
-import sys
-import urllib.request
-import zipfile
-from pathlib import Path
 from .utils import resolve_fuse_path
-from .data import load_data
+from .data import localize_and_compile_data
 
-from ultralytics import YOLO
-
-
-
-def train_model(config_path: str, data_config: Path, model_name: str):
-    """
-    Executes the Ultralytics model training within a Vertex AI Custom Training environment.
-    """
-    # Vertex AI sets AIP_MODEL_DIR to a gs:// URI.
-    # We use Vertex's automatic Cloud Storage FUSE to write directly to the bucket.
-    aip_model_dir = os.getenv("AIP_MODEL_DIR")
-    
-    output_dir = resolve_fuse_path(aip_model_dir)
-
-    print(f"Target Output Directory (FUSE): {output_dir}")
-    print(f"Initializing Model: {model_name}")
-    model = YOLO(model_name)
-
-    # Base arguments required for our Vertex AI environment
-    train_args = {
-        "data": data_config,
-        "project": output_dir, 
-        "name": "vertex_train", # Run name will be appended to project path
-        "exist_ok": True, # Overwrite existing run directory if it exists
-        "cfg": config_path # Let Ultralytics handle the YAML parsing natively!
-    }
-
-    print("Starting training with arguments...")
-    print(train_args)
-    
-    results = model.train(**train_args)
-
-    print("Vertex AI Custom Training Job script finished.")
+from hierarchical_yolo.train import train_curriculum
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train an Ultralytics YOLO model on Vertex AI.")
+    parser = argparse.ArgumentParser(description="Multi-Dataset Hierarchical YOLO Trainer on Vertex AI")
     
+    # Vertex Submission Arguments
     parser.add_argument(
-        "--config-uri",
+        "--datasets",
         type=str,
         required=True,
-        help="URI to the training configuration YAML file (e.g., gs://my-bucket/training_config.yaml)."
+        help="Comma-separated list of GCS URIs pointing to staging datasets (e.g., gs://bucket/d1,gs://bucket/d2)"
     )
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="yolov8n.pt",
-        help="Base model architecture to initialize (e.g., yolov8n.pt, yolov8s.pt)."
-    )
+    
+    # Passed through to train_curriculum
+    parser.add_argument("--project_name", type=str, required=True)
+    parser.add_argument("--base_model", type=str, default="yolov8n.pt")
+    parser.add_argument("--shallow_epochs", type=int, default=2)
+    parser.add_argument("--final_epochs", type=int, default=20)
+    parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--batch", type=int, default=16)
+    parser.add_argument("--workers", type=int, default=8)
     
     args = parser.parse_args()
 
-    # Pass the parsed arguments into the training method
-    train_model(
-        config_path=resolve_fuse_path(args.config_uri),
-        data_config=load_data(),
-        model_name=args.model
+    # 1. Parse datasets list
+    dataset_uris = [uri.strip() for uri in args.datasets.split(",") if uri.strip()]
+    if not dataset_uris:
+        raise ValueError("No valid dataset URIs provided in --datasets.")
+
+    # 2. Vertex AI Output Resolution
+    # Vertex AI sets AIP_MODEL_DIR based on your job config. 
+    # We use this as our root output directory so Ultralytics writes directly back to GCS.
+    aip_model_dir = os.getenv("AIP_MODEL_DIR")
+    if not aip_model_dir:
+        raise EnvironmentError("AIP_MODEL_DIR not set. Are you running inside Vertex AI Custom Training?")
+        
+    gcs_output_dir = resolve_fuse_path(aip_model_dir)
+
+    # 3. Localize & Orchestrate Data
+    workspace_dir = localize_and_compile_data(dataset_uris)
+    
+    # 4. Train
+    train_curriculum(
+        workspace_dir=workspace_dir,
+        model_dir=gcs_output_dir,
+        project_name=args.project_name,
+        base_model=args.base_model,
+        shallow_epochs=args.shallow_epochs,
+        final_epochs=args.final_epochs,
+        imgsz=args.imgsz,
+        batch=args.batch,
+        workers=args.workers,
+        val=True,
+        resume=False # Set to True if you want to support resuming interrupted Vertex runs later
     )
