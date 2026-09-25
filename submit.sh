@@ -92,11 +92,14 @@ echo "--------------------------------------------------------"
 # ------------------------------------------------------------------------------
 # Vertex AI CLI Workaround:
 # The gcloud CLI doesn't support setting disk size natively via string flags.
-# We dynamically generate a temporary YAML config to pass the disk requirements.
+# We dynamically generate a temporary YAML config to pass the disk requirements
+# and the baseOutputDirectory to avoid CLI flag conflicts.
 # ------------------------------------------------------------------------------
 TEMP_CONFIG="tmp_vertex_config_${JOB_NAME}.yaml"
 
 cat <<EOF > "${TEMP_CONFIG}"
+baseOutputDirectory:
+  outputUriPrefix: ${STAGING_BUCKET}/${JOB_NAME}
 workerPoolSpecs:
   - machineSpec:
       machineType: ${MACHINE_TYPE}
@@ -110,7 +113,7 @@ workerPoolSpecs:
       imageUri: ${IMAGE_URI}
 EOF
 
-# Submit the job to Vertex AI
+# Submit the job to Vertex AI using the generated config
 gcloud ai custom-jobs create \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
@@ -118,8 +121,7 @@ gcloud ai custom-jobs create \
   --config="${TEMP_CONFIG}" \
   --args="--datasets=${DATASETS}" \
   --args="--project_name=${PROJECT_NAME}" \
-  --args="--base_model=${MODEL_ARCH}" \
-  --base-output-directory="${STAGING_BUCKET}/${JOB_NAME}"
+  --args="--base_model=${MODEL_ARCH}"
 
 # Clean up the temporary config file
 rm "${TEMP_CONFIG}"
