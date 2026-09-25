@@ -28,7 +28,7 @@ usage() {
   echo "  -p, --project          Google Cloud Project ID"
   echo "  -r, --region           GCP Region (e.g., us-central1)"
   echo "  -i, --image-uri        Full Artifact Registry URI of the training container"
-  echo "  -d, --datasets         Comma-separated list of GCS dataset URIs (e.g., gs://bucket/d1,gs://bucket/d2)"
+  echo "  -d, --datasets         Space-separated list of GCS dataset URIs (enclose in quotes)"
   echo "  -b, --bucket           GCS Staging Bucket for outputs (e.g., gs://my-bucket/training_runs)"
   echo ""
   echo "Options (Optional):"
@@ -113,15 +113,24 @@ workerPoolSpecs:
       imageUri: ${IMAGE_URI}
 EOF
 
-# Submit the job to Vertex AI using the generated config
+# Build the Container Arguments Array dynamically
+GCLOUD_ARGS=()
+GCLOUD_ARGS+=("--args=--project_name=${PROJECT_NAME}")
+GCLOUD_ARGS+=("--args=--base_model=${MODEL_ARCH}")
+GCLOUD_ARGS+=("--args=--datasets")
+
+# Unpack the space-delimited string into distinct --args items
+for ds in $DATASETS; do
+  GCLOUD_ARGS+=("--args=${ds}")
+done
+
+# Submit the job to Vertex AI using the generated config and args array
 gcloud ai custom-jobs create \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
   --display-name="${JOB_NAME}" \
   --config="${TEMP_CONFIG}" \
-  --args="--datasets=${DATASETS}" \
-  --args="--project_name=${PROJECT_NAME}" \
-  --args="--base_model=${MODEL_ARCH}"
+  "${GCLOUD_ARGS[@]}"
 
 # Clean up the temporary config file
 rm "${TEMP_CONFIG}"

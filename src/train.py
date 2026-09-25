@@ -11,9 +11,9 @@ if __name__ == "__main__":
     # Vertex Submission Arguments
     parser.add_argument(
         "--datasets",
-        type=str,
+        nargs='+',
         required=True,
-        help="Comma-separated list of GCS URIs pointing to staging datasets (e.g., gs://bucket/d1,gs://bucket/d2)"
+        help="List of space-separated GCS URIs pointing to staging datasets."
     )
     
     # Passed through to train_curriculum
@@ -27,8 +27,8 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    # 1. Parse datasets list
-    dataset_uris = [uri.strip() for uri in args.datasets.split(",") if uri.strip()]
+    # 1. Clean dataset URIs
+    dataset_uris = [uri.strip() for uri in args.datasets if uri.strip()]
     if not dataset_uris:
         raise ValueError("No valid dataset URIs provided in --datasets.")
 
