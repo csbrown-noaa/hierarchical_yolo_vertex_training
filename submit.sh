@@ -89,17 +89,42 @@ echo "Hardware:     ${MACHINE_TYPE} w/ ${ACCELERATOR_COUNT}x ${ACCELERATOR_TYPE}
 echo "Disk Size:    ${DISK_SIZE}GB"
 echo "--------------------------------------------------------"
 
+# ------------------------------------------------------------------------------
+# Vertex AI CLI Workaround:
+# The gcloud CLI doesn't support setting disk size natively via string flags.
+# We dynamically generate a temporary YAML config to pass the disk requirements.
+# ------------------------------------------------------------------------------
+TEMP_CONFIG="tmp_vertex_config_${JOB_NAME}.yaml"
+
+cat <<EOF > "${TEMP_CONFIG}"
+workerPoolSpecs:
+  - machineSpec:
+      machineType: ${MACHINE_TYPE}
+      acceleratorType: ${ACCELERATOR_TYPE}
+      acceleratorCount: ${ACCELERATOR_COUNT}
+    replicaCount: 1
+    diskSpec:
+      bootDiskType: pd-ssd
+      bootDiskSizeGb: ${DISK_SIZE}
+    containerSpec:
+      imageUri: ${IMAGE_URI}
+EOF
+
 # Submit the job to Vertex AI
 gcloud ai custom-jobs create \
   --project="${PROJECT_ID}" \
   --region="${REGION}" \
   --display-name="${JOB_NAME}" \
-  --worker-pool-spec="machine-type=${MACHINE_TYPE},replica-count=1,accelerator-type=${ACCELERATOR_TYPE},accelerator-count=${ACCELERATOR_COUNT},container-image-uri=${IMAGE_URI},boot-disk-type=pd-ssd,boot-disk-size=${DISK_SIZE}" \
+  --config="${TEMP_CONFIG}" \
   --args="--datasets=${DATASETS}" \
   --args="--project_name=${PROJECT_NAME}" \
   --args="--base_model=${MODEL_ARCH}" \
   --base-output-directory="${STAGING_BUCKET}/${JOB_NAME}"
 
+# Clean up the temporary config file
+rm "${TEMP_CONFIG}"
+
 echo ""
 echo "Job submitted successfully! Monitor logs in the GCP Console under Vertex AI -> Training."
 echo ""
+
