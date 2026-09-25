@@ -6,3 +6,6 @@ mkdocstrings[python]
 torch==2.7.0
 torchvision==0.22.0
 ultralytics==8.3.186
+
+hierarchical_yolo @ git+https://github.com/csbrown-noaa/hierarchical_yolo.git
+pycocowriter
