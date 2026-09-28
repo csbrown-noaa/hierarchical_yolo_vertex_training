@@ -7,38 +7,45 @@ set -e
 PROJECT_ID=""
 REGION=""
 IMAGE_URI=""
-DATASETS=""
 STAGING_BUCKET=""
-PROJECT_NAME="hierarchical_run"
-MODEL_ARCH="yolov8n.pt"
 DISK_SIZE="100" # Default 100GB
+DRY_RUN=0
 
 # Hardware configuration (Defaults)
-MACHINE_TYPE="n1-standard-8" 
+MACHINE_TYPE="n1-standard-8"
 ACCELERATOR_TYPE="NVIDIA_TESLA_T4"
 ACCELERATOR_COUNT="1"
 
 # Function to display help menu
 usage() {
-  echo "Usage: $0 [OPTIONS]"
+  echo "Usage: $0 [GCP OPTIONS] -- [CONTAINER ARGUMENTS]"
   echo ""
   echo "Submits a Multi-Dataset Hierarchical Training Job to Vertex AI."
   echo ""
-  echo "Options (Required):"
+  echo "GCP Options (Required):"
   echo "  -p, --project          Google Cloud Project ID"
   echo "  -r, --region           GCP Region (e.g., us-central1)"
   echo "  -i, --image-uri        Full Artifact Registry URI of the training container"
-  echo "  -d, --datasets         Space-separated list of GCS dataset URIs (enclose in quotes)"
   echo "  -b, --bucket           GCS Staging Bucket for outputs (e.g., gs://my-bucket/training_runs)"
   echo ""
-  echo "Options (Optional):"
-  echo "  -n,  --name            Project name for output (default: hierarchical_run)"
-  echo "  -m,  --model-arch      Base model architecture (default: yolov8n.pt)"
+  echo "GCP Hardware Options (Optional):"
   echo "  -s,  --disk-size       Boot disk size in GB (default: 100)"
   echo "  -mt, --machine-type    Compute instance type (default: n1-standard-8)"
   echo "  -at, --accelerator     Accelerator/GPU type (default: NVIDIA_TESLA_T4)"
   echo "  -ac, --accel-count     Number of accelerators (default: 1)"
+  echo "  --dry                  Print the gcloud command without executing it"
   echo "  -h,  --help            Display this help message and exit"
+  echo ""
+  echo "----------------------------------------------------------------------"
+  echo "Container Arguments (MUST follow '--'):"
+  echo "----------------------------------------------------------------------"
+  echo "  --project_name         Name of the run/project (Required)"
+  echo "  --datasets             Space-separated GCS dataset URIs (Required, no quotes needed!)"
+  echo "  --base_model           Base model architecture (Optional, default: yolov8n.pt)"
+  echo ""
+  echo "Example:"
+  echo "  $0 -p my-proj -r us-central1 -i my-image -b gs://bucket -- \\"
+  echo "     --project_name my_run --datasets gs://data1 gs://data2 --base_model yolo.pt"
   echo ""
 }
 
@@ -48,15 +55,18 @@ while [[ $# -gt 0 ]]; do
     -p|--project) PROJECT_ID="$2"; shift 2 ;;
     -r|--region) REGION="$2"; shift 2 ;;
     -i|--image-uri) IMAGE_URI="$2"; shift 2 ;;
-    -d|--datasets) DATASETS="$2"; shift 2 ;;
     -b|--bucket) STAGING_BUCKET="$2"; shift 2 ;;
-    -n|--name) PROJECT_NAME="$2"; shift 2 ;;
-    -m|--model-arch) MODEL_ARCH="$2"; shift 2 ;;
     -s|--disk-size) DISK_SIZE="$2"; shift 2 ;;
     -mt|--machine-type) MACHINE_TYPE="$2"; shift 2 ;;
     -at|--accelerator) ACCELERATOR_TYPE="$2"; shift 2 ;;
     -ac|--accel-count) ACCELERATOR_COUNT="$2"; shift 2 ;;
+    --dry) DRY_RUN=1; shift 1 ;;
     -h|--help) usage; exit 0 ;;
+    --) 
+      shift
+      PASSTHROUGH_ARGS=("$@")
+      break
+      ;;
     *) echo "Error: Unknown option: $1"; usage; exit 1 ;;
   esac
 done
@@ -66,11 +76,16 @@ MISSING_ARGS=0
 if [[ -z "$PROJECT_ID" ]]; then echo "Error: --project is required."; MISSING_ARGS=1; fi
 if [[ -z "$REGION" ]]; then echo "Error: --region is required."; MISSING_ARGS=1; fi
 if [[ -z "$IMAGE_URI" ]]; then echo "Error: --image-uri is required."; MISSING_ARGS=1; fi
-if [[ -z "$DATASETS" ]]; then echo "Error: --datasets is required."; MISSING_ARGS=1; fi
 if [[ -z "$STAGING_BUCKET" ]]; then echo "Error: --bucket is required."; MISSING_ARGS=1; fi
 
 if [[ $MISSING_ARGS -eq 1 ]]; then
   echo ""
+  usage
+  exit 1
+fi
+
+if [ ${#PASSTHROUGH_ARGS[@]} -eq 0 ]; then
+  echo "Error: No container arguments found. You must include '--' followed by python args."
   usage
   exit 1
 fi
@@ -81,19 +96,15 @@ echo ""
 echo "Submitting Custom Training Job: ${JOB_NAME}..."
 echo "Project:      ${PROJECT_ID}"
 echo "Region:       ${REGION}"
-echo "Datasets:     ${DATASETS}"
 echo "Output:       ${STAGING_BUCKET}/${JOB_NAME}"
-echo "Model:        ${MODEL_ARCH}"
 echo "Image:        ${IMAGE_URI}"
-echo "Hardware:     ${MACHINE_TYPE} w/ ${ACCELERATOR_COUNT}x ${ACCELERATOR_TYPE}"
+echo "Hardware:     ${MACHINE_TYPE} w/ ${ACCELERATOR_COUNT}x${ACCELERATOR_TYPE}"
 echo "Disk Size:    ${DISK_SIZE}GB"
+echo "Container Args: ${PASSTHROUGH_ARGS[*]}"
 echo "--------------------------------------------------------"
 
 # ------------------------------------------------------------------------------
-# Vertex AI CLI Workaround:
-# The gcloud CLI doesn't support setting disk size natively via string flags.
-# We dynamically generate a temporary YAML config to pass the disk requirements
-# and the baseOutputDirectory to avoid CLI flag conflicts.
+# 1. Build the Hardware YAML Config
 # ------------------------------------------------------------------------------
 TEMP_CONFIG="tmp_vertex_config_${JOB_NAME}.yaml"
 
@@ -113,29 +124,41 @@ workerPoolSpecs:
       imageUri: ${IMAGE_URI}
 EOF
 
-# Build the Container Arguments Array dynamically
-GCLOUD_ARGS=()
-GCLOUD_ARGS+=("--args=--project_name=${PROJECT_NAME}")
-GCLOUD_ARGS+=("--args=--base_model=${MODEL_ARCH}")
-GCLOUD_ARGS+=("--args=--datasets")
+# ------------------------------------------------------------------------------
+# 2. Convert Passthrough Array to Comma-Separated String for gcloud --args
+# ------------------------------------------------------------------------------
+SAVE_IFS="$IFS"
+IFS=","
+CONTAINER_ARGS="${PASSTHROUGH_ARGS[*]}"
+IFS="$SAVE_IFS"
 
-# Unpack the space-delimited string into distinct --args items
-for ds in $DATASETS; do
-  GCLOUD_ARGS+=("--args=${ds}")
-done
-
-# Submit the job to Vertex AI using the generated config and args array
-gcloud ai custom-jobs create \
-  --project="${PROJECT_ID}" \
-  --region="${REGION}" \
-  --display-name="${JOB_NAME}" \
-  --config="${TEMP_CONFIG}" \
-  "${GCLOUD_ARGS[@]}"
+# ------------------------------------------------------------------------------
+# 3. Submit the Job
+# ------------------------------------------------------------------------------
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "[DRY RUN] The following command would be executed:"
+  echo "--------------------------------------------------------"
+  echo "gcloud ai custom-jobs create \\"
+  echo "  --project=\"${PROJECT_ID}\" \\"
+  echo "  --region=\"${REGION}\" \\"
+  echo "  --display-name=\"${JOB_NAME}\" \\"
+  echo "  --config=\"${TEMP_CONFIG}\" \\"
+  echo "  --args=\"${CONTAINER_ARGS}\""
+  echo "--------------------------------------------------------"
+else
+  gcloud ai custom-jobs create \
+    --project="${PROJECT_ID}" \
+    --region="${REGION}" \
+    --display-name="${JOB_NAME}" \
+    --config="${TEMP_CONFIG}" \
+    --args="${CONTAINER_ARGS}"
+fi
 
 # Clean up the temporary config file
 rm "${TEMP_CONFIG}"
 
-echo ""
-echo "Job submitted successfully! Monitor logs in the GCP Console under Vertex AI -> Training."
-echo ""
-
+if [ "$DRY_RUN" -eq 0 ]; then
+  echo ""
+  echo "Job submitted successfully! Monitor logs in the GCP Console under Vertex AI -> Training."
+  echo ""
+fi
