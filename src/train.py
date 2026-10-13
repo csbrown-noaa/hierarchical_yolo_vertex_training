@@ -3,6 +3,7 @@ import argparse
 from .utils import resolve_fuse_path
 from .data import localize_and_compile_data
 
+import torch
 from hierarchical_yolo.train import train_curriculum
 
 if __name__ == "__main__":
@@ -44,6 +45,9 @@ if __name__ == "__main__":
     # 3. Localize & Orchestrate Data
     workspace_dir = localize_and_compile_data(dataset_uris)
     
+    device_count = torch.cuda.device_count()
+    device_list = list(range(device_count))
+
     # 4. Train
     train_curriculum(
         workspace_dir=workspace_dir,
@@ -55,6 +59,7 @@ if __name__ == "__main__":
         imgsz=args.imgsz,
         batch=args.batch,
         workers=args.workers,
+        device=device_list,
         val=True,
         resume=False # Set to True if you want to support resuming interrupted Vertex runs later
     )
